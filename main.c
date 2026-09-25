@@ -1,12 +1,11 @@
+#include "./fyers-session-helpers.c"
 #include <cjson/cJSON.h>
 #include <fyers_api.h>
-#include <fyers_model.h>
-#include <fyers_session.h>
 #include <stdio.h>
-#include <string.h>
+#include <stdlib.h>
+#include <time.h>
 
-fyers_session_t *get_fyers_session();
-fyers_model_t *get_fyers_model(fyers_session_t *session);
+void show_next_3_futures(fyers_model_t *model, const char* input_symbol);
 
 int main(void) {
   fyers_session_t *session = get_fyers_session();
@@ -22,7 +21,13 @@ int main(void) {
     fprintf(stderr, "Error: Unable to find Fyers Models\n");
     return 1;
   }
-  puts("ready for take off");
+  puts("Fyers is connected");
+
+  char input_symbol[63] = {0};
+  puts("Enter your symbol");
+  scanf("%s", input_symbol);
+  show_next_3_futures(model, input_symbol);
+
   fyers_model_destroy(model);
   fyers_session_destroy(session);
   fyers_cleanup();
@@ -30,107 +35,64 @@ int main(void) {
   return 0;
 }
 
-fyers_session_t *get_fyers_session() {
-  FILE *file_read_ptr;
-  char client_id[256];
-  char redirect_uri[1024];
-  char secret_key[256];
-
-  if ((file_read_ptr = fopen("./data/fyers_credentials.txt", "r")) == NULL) {
-    puts("Enter credentials: client_id redirect_uri secret_key");
-    scanf("%254s %1023s %254s", client_id, redirect_uri, secret_key);
-
-    puts("taken");
-    // save for later use
-    FILE *file_write_ptr;
-    if ((file_write_ptr = fopen("./data/fyers_credentials.txt", "w")) == NULL) {
-      fprintf(
-          stderr,
-          "File or directory (data/fyers_credentials.txt) couldnt be created");
-      return NULL;
+void show_next_3_futures(fyers_model_t *model, const char* input_symbol) {
+  fyers_response_t *future_chain =
+      fyers_model_get_futures_chain(model, input_symbol);
+  cJSON *futures_json = cJSON_Parse(future_chain->data);
+  if (futures_json == NULL) {
+    const char *error_ptr = cJSON_GetErrorPtr();
+    if (error_ptr != NULL) {
+      fprintf(stderr, "Error: %s\n", error_ptr);
     }
-    fprintf(file_write_ptr, "%s %s %s", client_id, redirect_uri, secret_key);
+    cJSON_Delete(futures_json);
+    fyers_response_destroy(future_chain);
+    return;
+  }
+  const cJSON *future_arr =
+      cJSON_GetObjectItemCaseSensitive(futures_json, "data");
+  const cJSON *future = NULL;
+  puts("| Symbol \t\t| LastPrice \t| Change \t| Change %age \t| Volume \t| "
+       "Expiry \t|");
 
-    fclose(file_write_ptr);
-  } else {
-    fscanf(file_read_ptr, "%254s %1023s %254s", client_id, redirect_uri,
-           secret_key);
-    fclose(file_read_ptr);
+  cJSON_ArrayForEach(future, future_arr) {
+    const cJSON *ch_raw = cJSON_GetObjectItemCaseSensitive(future, "ch");
+    const cJSON *chp_raw = cJSON_GetObjectItemCaseSensitive(future, "chp");
+    const cJSON *expiry_raw =
+        cJSON_GetObjectItemCaseSensitive(future, "expiry");
+    const cJSON *lp_raw = cJSON_GetObjectItemCaseSensitive(future, "lp");
+    const cJSON *symbol_raw =
+        cJSON_GetObjectItemCaseSensitive(future, "symbol");
+    const cJSON *volume_raw =
+        cJSON_GetObjectItemCaseSensitive(future, "volume");
+
+    if (!cJSON_IsNumber(ch_raw) || !cJSON_IsNumber((chp_raw)) ||
+        !cJSON_IsString(expiry_raw) || !cJSON_IsNumber(lp_raw) ||
+        !cJSON_IsString(symbol_raw) || !cJSON_IsNumber(volume_raw)) {
+      fprintf(stderr, "Failed to get data");
+
+      cJSON_Delete(futures_json);
+      fyers_response_destroy(future_chain);
+      return;
+    }
+
+    double ch = ch_raw->valuedouble;
+    double chp = chp_raw->valuedouble;
+    double lp = lp_raw->valuedouble;
+    const char *symbol = symbol_raw->valuestring;
+    int volume = volume_raw->valueint;
+
+    time_t expiry_int = atoi(expiry_raw->valuestring);
+    struct tm ts;
+    char expiry[63];
+    ts = *localtime(&expiry_int);
+    strftime(expiry, sizeof(expiry), "%d-%m %Y", &ts);
+
+    printf("| %s \t| %.2f \t| %.2f \t\t| %.2f \t\t| %d \t| %s |\t\n", symbol,
+           lp, ch, chp, volume, expiry);
   }
 
-  fyers_session_t *session =
-      fyers_session_create(client_id, redirect_uri, secret_key);
-  return session;
-}
+  puts("");
 
-fyers_model_t *get_fyers_model(fyers_session_t *session) {
-  char buffer[1024] = {0};
-
-  fyers_model_t *model;
-  FILE *file_read_ptr;
-
-  puts("Started with session");
-  if ((file_read_ptr = fopen("./data/access_token.txt", "r")) == NULL) {
-    generate_authcode(session);
-
-    puts("Enter auth code:");
-    scanf("%1022s", buffer);
-    fyers_session_set_authcode(session, buffer);
-    fyers_response_t *token_response = generate_token(session);
-    printf("resp: data-> %s \n", token_response->data);
-    cJSON *token = cJSON_Parse(token_response->data);
-    if (token == NULL) {
-      const char *error_ptr = cJSON_GetErrorPtr();
-      if (error_ptr != NULL) {
-        fprintf(stderr, "Error: No Token %s\n", error_ptr);
-        cJSON_Delete(token);
-        fyers_response_destroy(token_response);
-        return NULL;
-      }
-    }
-    const char *access_token_string = NULL;
-    const cJSON *acess_token_cjson =
-        cJSON_GetObjectItemCaseSensitive(token, "access_token");
-    if (!cJSON_IsString(acess_token_cjson)) {
-      fprintf(stderr, "token response is not a string");
-      cJSON_Delete(token);
-      fyers_response_destroy(token_response);
-      return NULL;
-    } else {
-      access_token_string = acess_token_cjson->valuestring;
-    }
-
-    const char *client_id = fyers_session_get_client_id(session);
-    model = fyers_model_create(client_id, access_token_string, false, NULL,
-                               FYERS_LOG_INFO);
-
-    if (!model) {
-      cJSON_Delete(token);
-      fyers_response_destroy(token_response);
-      fprintf(stderr, "Failed to create model");
-      return NULL;
-    }
-
-    // save for later use
-    FILE *file_write_ptr;
-    if ((file_write_ptr = fopen("./data/access_token.txt", "w")) == NULL) {
-      fprintf(stderr,
-              "File or directory (data/access_token.txt) couldnt be created");
-      return NULL;
-    }
-    fprintf(file_write_ptr, "%s", access_token_string);
-    cJSON_Delete(token);
-    fyers_response_destroy(token_response);
-    fclose(file_write_ptr);
-  } else {
-    memset(buffer, 0, strlen(buffer));
-    fscanf(file_read_ptr, "%1023s", buffer);
-    const char *client_id = fyers_session_get_client_id(session);
-    const char *access_token = buffer;
-    model = fyers_model_create(client_id, access_token, false, NULL,
-                               FYERS_LOG_INFO);
-    fclose(file_read_ptr);
-  }
-
-  return model;
+  cJSON_Delete(futures_json);
+  fyers_response_destroy(future_chain);
 }
