@@ -15,13 +15,13 @@ Work in progress: the full-market scan isn't implemented yet.
 
 ```bash
 mkdir -p data db
-gcc -o futscan main.c -lcurl -lcjson -lfyers_api
+cmake -B build && cmake --build build
 ```
 
 ## Usage
 
 ```bash
-./futscan
+out/cotango-backwardation
 ```
 
 1. **Seed the db** downloads the NSE symbol master from Fyers and writes it to `db/instruments.dat`. Run this first.
