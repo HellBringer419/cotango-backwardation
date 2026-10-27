@@ -39,4 +39,5 @@ target_link_libraries(cotango-backwardation
   PRIVATE
     cjson
     fyers-api-c
+    curl
 )
