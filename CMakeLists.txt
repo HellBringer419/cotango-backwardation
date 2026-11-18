@@ -22,7 +22,7 @@ set_target_properties(cotango-backwardation
 
 target_compile_options(cotango-backwardation
   PRIVATE
-    -Wall -Wextra -Wpedantic -fsanitize=undefined,address
+    -Wall -Wextra -Wpedantic -fsanitize=undefined,address -g
 )
 
 # target_link_directories(cotango-backwardation

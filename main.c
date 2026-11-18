@@ -8,7 +8,10 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
+
+#define SYMBOL_MAX 32
 
 unsigned int show_choice(void);
 
@@ -17,13 +20,14 @@ int download_symbols_master(void);
 
 void parse_symbols_json(cJSON *instrument, FILE *writePtr);
 int create_instruments_master_file(void);
+int read_instruments_master_file(void);
 
 void show_next_3_futures(fyers_model_t *model, const char *input_symbol,
                          bool print, double *result);
 int find_cotango(fyers_model_t *model);
 
 typedef struct instr {
-  char *symbol;
+  char symbol[SYMBOL_MAX];
   int exchange;
   int exchange_token;
   int type;
@@ -69,6 +73,9 @@ int main(void) {
     case 3:
       find_cotango(model);
       break;
+    case 4:
+      read_instruments_master_file();
+      break;
     default:
       puts("NOT_IMPLEMENTED");
       break;
@@ -87,9 +94,10 @@ unsigned int show_choice(void) {
   puts("");
   unsigned int choiceTaken;
   printf("%s", "Select Your Choice\n"
-               "1. SEED the db\n"
+               "1. SEED the instrument list\n"
                "2. CHECK on an EQ\n"
                "3. RUN cotango across all EQs\n"
+               "4. READ instrument list\n"
                "5. STOP this program\n"
                "> ");
   scanf("%u", &choiceTaken);
@@ -135,15 +143,17 @@ void parse_symbols_json(cJSON *instrument, FILE *writePtr) {
       !cJSON_IsNumber(type_raw) || !cJSON_IsBool(has_futures_raw)) {
     fprintf(stderr, "Typing mismatch while JSON parsing instrument master\n");
   } else {
-    char *instrumentId = instrument->string;
-    INSTRUMENT currentInstr = {instrumentId,
-                               exchange_raw->valueint,
-                               token_raw->valueint,
-                               type_raw->valueint,
-                               0.0,
-                               0.0,
-                               0.0,
-                               has_futures_raw->valueint};
+    INSTRUMENT currentInstr = {.symbol = "",
+                               .exchange = exchange_raw->valueint,
+                               .exchange_token = token_raw->valueint,
+                               .type = type_raw->valueint,
+                               .bid = 0.0,
+                               .ask = 0.0,
+                               .ltp = 0.0,
+                               .has_futures = cJSON_IsTrue(has_futures_raw)};
+      snprintf(currentInstr.symbol, SYMBOL_MAX, "%s", instrument->string);
+
+    // printf("%s %d %d\n", currentInstr.symbol, currentInstr.exchange, currentInstr.exchange_token);
     fseek(writePtr, currentInstr.exchange_token * sizeof(INSTRUMENT), SEEK_SET);
     fwrite(&currentInstr, sizeof(INSTRUMENT), 1, writePtr);
   }
@@ -192,6 +202,32 @@ int create_instruments_master_file(void) {
   free(content);
   fclose(writePtr);
 
+  return 0;
+}
+
+int read_instruments_master_file(void) {
+  FILE *cfPtr;
+  if ((cfPtr = fopen("./db/instruments.dat", "rb+")) == NULL) {
+    fprintf(stderr, "Failed to read instruments db");
+    return 1;
+  }
+
+  INSTRUMENT buffer = {.symbol = "",
+                       .exchange = 0,
+                       .exchange_token = 0,
+                       .type = 0,
+                       .bid = 0.0,
+                       .ask = 0.0,
+                       .ltp = 0.0,
+                       .has_futures = false};
+  rewind(cfPtr); // set seek head to start of file
+  while (!feof(cfPtr)) {
+    int has_read = fread(&buffer, sizeof(INSTRUMENT), 1, cfPtr);
+      if (has_read != 0 && buffer.exchange_token != 0 && buffer.has_futures) {
+      printf("%s %d %d %d %.2f %.2f %.2f %d \n", buffer.symbol, buffer.exchange, buffer.exchange_token, buffer.type, buffer.bid, buffer.ask, buffer.ltp, buffer.has_futures);
+    }
+  }
+  fclose(cfPtr);
   return 0;
 }
 
@@ -292,38 +328,42 @@ int find_cotango(fyers_model_t *model) {
     return 1;
   }
 
-  INSTRUMENT buffer = {
-      .symbol = 0,
-      .exchange_token = 0,
-  };
-  char *eligible_instruments[10000] = {""};
+  INSTRUMENT buffer = {.symbol = "",
+                       .exchange = 0,
+                       .exchange_token = 0,
+                       .type = 0,
+                       .bid = 0.0,
+                       .ask = 0.0,
+                       .ltp = 0.0,
+                       .has_futures = false};
+  const char *eligible_instruments[10000] = {""};
   size_t index = 0;
 
   rewind(cfPtr); // set seek head to start of file
   while (!feof(cfPtr)) {
-    fread(&buffer, sizeof(INSTRUMENT), 1, cfPtr);
-    if (buffer.exchange_token != 0 && buffer.has_futures == true) {
-      printf("%s", buffer.symbol);
+    int has_read = fread(&buffer, sizeof(INSTRUMENT), 1, cfPtr);
+    if (has_read != 0 && buffer.exchange_token != 0 && buffer.has_futures == true) {
       eligible_instruments[index++] = buffer.symbol;
     }
   }
-  printf("Found %zu instruments\n", index);
+  printf("Found %zu instruments with futures\n", index);
 
   // 2. Loop over eligible instruments to get thier future change arrays
-  // char *chosen_instruments[10000];
-  // for (size_t i = 0; i < index; i++) {
-  //   double result[4] = {0.0};
-  //   // show_next_3_futures(model, eligible_instruments[i], false, result);
-  //
-  //   // 3. Determine if they deviate from being contago (or backwardation)
-  //   // atm only show thier changes
-  //   printf("%s: \t", eligible_instruments[i]);
-  //   // for (size_t j=0; j< sizeof(result)/sizeof(result[0]); j++) {
-  //   //   if (result[j] == 0) continue;
-  //   //   printf("%.2f \t", result[j]);
-  //   // }
-  //   puts("");
-  // }
+  const char *chosen_instruments[10000];
+  for (size_t i = 0; i < index; i++) {
+    double result[4] = {0.0};
+    show_next_3_futures(model, eligible_instruments[i], false, result);
+    printf("%s %.2f %.2f", eligible_instruments[i], result[0], result[1]);
+
+    // 3. Determine if they deviate from being contago (or backwardation)
+    // atm only show thier changes
+    // printf("%s: \t", eligible_instruments[i]);
+    // for (size_t j=0; j< sizeof(result)/sizeof(result[0]); j++) {
+    //   if (result[j] == 0) continue;
+    //   printf("%.2f \t", result[j]);
+    // }
+    puts("");
+  }
 
   // 4. Show the instruments that the algo choose
 
