@@ -8,7 +8,6 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <time.h>
 
 #define SYMBOL_MAX 32
@@ -23,9 +22,13 @@ void parse_symbols_json(cJSON *instrument, FILE *writePtr);
 int create_instruments_master_file(void);
 int read_instruments_master_file(void);
 
+int parse_futures_json(const cJSON *future, const cJSON *future_arr,
+                       double *last_prices, bool print);
 int show_next_3_futures(fyers_model_t *model, const char *input_symbol,
-                         bool print, double *result);
+                        bool print, double *result);
 int find_cotango(fyers_model_t *model);
+
+int order_instr(fyers_model_t *model, const char *input_symbol);
 
 typedef struct instr {
   char symbol[SYMBOL_MAX];
@@ -58,24 +61,30 @@ int main(void) {
   puts("Fyers is connected");
 
   char input_symbol[63] = {0};
-  unsigned int choice;
+  unsigned int choice = 100;
   double future_result[FUT_CHNG_MAX] = {0.0};
-  while ((choice = show_choice()) != 5) {
+  while ((choice = show_choice()) != 10) {
     switch (choice) {
     case 1:
       download_symbols_master();
       create_instruments_master_file();
       break;
     case 2:
+      find_cotango(model);
+      break;
+
+    case 3:
+      read_instruments_master_file();
+      break;
+    case 4:
       puts("Enter your symbol");
       scanf("%s", input_symbol);
       show_next_3_futures(model, input_symbol, true, future_result);
       break;
-    case 3:
-      find_cotango(model);
-      break;
-    case 4:
-      read_instruments_master_file();
+    case 5:
+      puts("Enter your symbol");
+      scanf("%s", input_symbol);
+      order_instr(model, input_symbol);
       break;
     default:
       puts("NOT_IMPLEMENTED");
@@ -96,10 +105,14 @@ unsigned int show_choice(void) {
   unsigned int choiceTaken;
   printf("%s", "Select Your Choice\n"
                "1. SEED the instrument list\n"
-               "2. CHECK on an EQ\n"
-               "3. RUN cotango across all EQs\n"
-               "4. READ instrument list\n"
-               "5. STOP this program\n"
+               "2. RUN cotango across all EQs\n"
+
+               "10. STOP this program\n"
+               "\n"
+               "Helpers: \n"
+               "3. READ instrument list\n"
+               "4. CHECK on an EQ\n"
+               "5. ORDER any instrument\n"
                "> ");
   scanf("%u", &choiceTaken);
   return choiceTaken;
@@ -152,9 +165,10 @@ void parse_symbols_json(cJSON *instrument, FILE *writePtr) {
                                .ask = 0.0,
                                .ltp = 0.0,
                                .has_futures = cJSON_IsTrue(has_futures_raw)};
-      snprintf(currentInstr.symbol, SYMBOL_MAX, "%s", instrument->string);
+    snprintf(currentInstr.symbol, SYMBOL_MAX, "%s", instrument->string);
 
-    // printf("%s %d %d\n", currentInstr.symbol, currentInstr.exchange, currentInstr.exchange_token);
+    // printf("%s %d %d\n", currentInstr.symbol, currentInstr.exchange,
+    // currentInstr.exchange_token);
     fseek(writePtr, currentInstr.exchange_token * sizeof(INSTRUMENT), SEEK_SET);
     fwrite(&currentInstr, sizeof(INSTRUMENT), 1, writePtr);
   }
@@ -225,38 +239,19 @@ int read_instruments_master_file(void) {
   rewind(cfPtr); // set seek head to start of file
   while (!feof(cfPtr)) {
     int has_read = fread(&buffer, sizeof(INSTRUMENT), 1, cfPtr);
-      if (has_read != 0 && buffer.exchange_token != 0 && buffer.has_futures) {
-      printf("%s %d %d %d %.2f %.2f %.2f %d \n", buffer.symbol, buffer.exchange, buffer.exchange_token, buffer.type, buffer.bid, buffer.ask, buffer.ltp, buffer.has_futures);
+    if (has_read != 0 && buffer.exchange_token != 0 && buffer.has_futures) {
+      printf("%s %d %d %d %.2f %.2f %.2f %d \n", buffer.symbol, buffer.exchange,
+             buffer.exchange_token, buffer.type, buffer.bid, buffer.ask,
+             buffer.ltp, buffer.has_futures);
     }
   }
   fclose(cfPtr);
   return 0;
 }
 
-int show_next_3_futures(fyers_model_t *model, const char *input_symbol,
-                         bool print, double *result) {
-  fyers_response_t *future_chain =
-      fyers_model_get_futures_chain(model, input_symbol);
-  cJSON *futures_json = cJSON_Parse(future_chain->data);
-  if (futures_json == NULL) {
-    const char *error_ptr = cJSON_GetErrorPtr();
-    if (error_ptr != NULL) {
-      if(print) fprintf(stderr, "Error: %s\n", error_ptr);
-    }
-    cJSON_Delete(futures_json);
-    fyers_response_destroy(future_chain);
-      return 1;
-  }
-  const cJSON *future_arr =
-      cJSON_GetObjectItemCaseSensitive(futures_json, "data");
-  const cJSON *future = NULL;
-  if (print) {
-    puts("| Symbol \t\t| LastPrice \t| Change \t| Change %age \t| Volume \t| "
-         "Expiry \t|");
-  }
-
+int parse_futures_json(const cJSON *future, const cJSON *future_arr,
+                       double *last_prices, bool print) {
   int index = 0;
-  int last_prices[4] = {0}; // Expected at max 3 FUTs
   cJSON_ArrayForEach(future, future_arr) {
     const cJSON *ch_raw = cJSON_GetObjectItemCaseSensitive(future, "ch");
     const cJSON *chp_raw = cJSON_GetObjectItemCaseSensitive(future, "chp");
@@ -271,10 +266,8 @@ int show_next_3_futures(fyers_model_t *model, const char *input_symbol,
     if (!cJSON_IsNumber(ch_raw) || !cJSON_IsNumber((chp_raw)) ||
         !cJSON_IsString(expiry_raw) || !cJSON_IsNumber(lp_raw) ||
         !cJSON_IsString(symbol_raw) || !cJSON_IsNumber(volume_raw)) {
-      if(print) fprintf(stderr, "Failed to get data");
-
-      cJSON_Delete(futures_json);
-      fyers_response_destroy(future_chain);
+      if (print)
+        fprintf(stderr, "Failed to get data");
       return 2;
     }
 
@@ -303,13 +296,48 @@ int show_next_3_futures(fyers_model_t *model, const char *input_symbol,
     index++;
   }
 
+  return 0;
+}
+
+int show_next_3_futures(fyers_model_t *model, const char *input_symbol,
+                        bool print, double *result) {
+  fyers_response_t *future_chain =
+      fyers_model_get_futures_chain(model, input_symbol);
+  cJSON *futures_json = cJSON_Parse(future_chain->data);
+  if (futures_json == NULL) {
+    const char *error_ptr = cJSON_GetErrorPtr();
+    if (error_ptr != NULL) {
+      if (print)
+        fprintf(stderr, "Error: %s\n", error_ptr);
+    }
+    cJSON_Delete(futures_json);
+    fyers_response_destroy(future_chain);
+    return 1;
+  }
+  const cJSON *future_arr =
+      cJSON_GetObjectItemCaseSensitive(futures_json, "data");
+  const cJSON *future = NULL;
+  if (print) {
+    puts("| Symbol \t\t| LastPrice \t| Change \t| Change %age \t| Volume \t| "
+         "Expiry \t|");
+  }
+
+  double last_prices[FUT_CHNG_MAX] = {0}; // Expected at max 3 FUTs
+  int fut_parse_resp =
+      parse_futures_json(future, future_arr, last_prices, print);
+  if (fut_parse_resp != 0) {
+    cJSON_Delete(futures_json);
+    fyers_response_destroy(future_chain);
+    return 2;
+  }
+
   if (print) {
     puts("");
   }
   size_t result_index = 0;
-  for (int i = 1; i < 4; i++) {
-    // if (last_prices[i] == 0)
-    //   continue;
+  for (int i = 1; i < FUT_CHNG_MAX; i++) {
+    if (last_prices[i] == 0)
+      continue;
     double ch_pct =
         (last_prices[i] - last_prices[i - 1]) * 100.0 / (1.00 * last_prices[i]);
     result[result_index++] = ch_pct;
@@ -346,10 +374,12 @@ int find_cotango(fyers_model_t *model) {
   rewind(cfPtr); // set seek head to start of file
   while (!feof(cfPtr)) {
     int has_read = fread(&buffer, sizeof(INSTRUMENT), 1, cfPtr);
-    if (has_read != 0 && buffer.exchange_token != 0 && buffer.has_futures == true) {
+    if (has_read != 0 && buffer.exchange_token != 0 &&
+        buffer.has_futures == true) {
       strncpy(eligible_instruments[index], buffer.symbol, SYMBOL_MAX - 1);
       eligible_instruments[index][SYMBOL_MAX - 1] = '\0';
-      // printf("%zu %s - %s of %p \n", index, eligible_instruments[index],buffer.symbol, buffer.symbol);
+      // printf("%zu %s - %s of %p \n", index,
+      // eligible_instruments[index],buffer.symbol, buffer.symbol);
       index++;
     }
   }
@@ -360,15 +390,20 @@ int find_cotango(fyers_model_t *model) {
   size_t chosen_index = 0;
   for (size_t i = 0; i < index; i++) {
     double result[FUT_CHNG_MAX] = {0.0};
-    int is_completed = show_next_3_futures(model, eligible_instruments[i], false, result);
-    // if (is_completed == 0) printf("%s %.2f %.2f \n", eligible_instruments[i], result[0], result[1]);
-    if (is_completed > 0) continue;
+    int is_completed =
+        show_next_3_futures(model, eligible_instruments[i], false, result);
+    // if (is_completed == 0) printf("%s %.2f %.2f \n",
+    // eligible_instruments[i], result[0], result[1]);
+    if (is_completed > 0)
+      continue;
 
     // 3. Determine if they deviate from being contago (or backwardation)
-    for (int j =1; j<FUT_CHNG_MAX; j++) {
-      if (result[j-1] > result[j]) {
-        printf("Observed cotango %s, result prev: %.2f & current: %.2f \n", eligible_instruments[i], result[j-1], result[j]);
-        strncpy(chosen_instruments[chosen_index++], eligible_instruments[i], SYMBOL_MAX);
+    for (int j = 1; j < FUT_CHNG_MAX; j++) {
+      if (result[j - 1] > result[j]) {
+        printf("Observed cotango %s, result prev: %.2f & current: %.2f \n",
+               eligible_instruments[i], result[j - 1], result[j]);
+        strncpy(chosen_instruments[chosen_index++], eligible_instruments[i],
+                SYMBOL_MAX);
       }
     }
   }
@@ -379,7 +414,9 @@ int find_cotango(fyers_model_t *model) {
   // }
 
   clock_t end = clock();
-  printf("Time Spent: %.2f\n", (double)(end - begin)/CLOCKS_PER_SEC);
+  printf("Time Spent: %.2f\n", (double)(end - begin) / CLOCKS_PER_SEC);
   fclose(cfPtr);
   return 0;
 }
+
+int order_instr(fyers_model_t *model, const char *input_symbol) { return 0; }
