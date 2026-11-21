@@ -11,7 +11,7 @@
 #include <time.h>
 
 #define SYMBOL_MAX 32
-#define FUT_CHNG_MAX 4
+#define FUT_CHNG_MAX 3
 
 unsigned int show_choice(void);
 
@@ -322,7 +322,7 @@ int show_next_3_futures(fyers_model_t *model, const char *input_symbol,
          "Expiry \t|");
   }
 
-  double last_prices[FUT_CHNG_MAX] = {0}; // Expected at max 3 FUTs
+  double last_prices[FUT_CHNG_MAX + 1] = {0}; // Expected at max 3 FUTs and the index
   int fut_parse_resp =
       parse_futures_json(future, future_arr, last_prices, print);
   if (fut_parse_resp != 0) {
@@ -335,9 +335,9 @@ int show_next_3_futures(fyers_model_t *model, const char *input_symbol,
     puts("");
   }
   size_t result_index = 0;
-  for (int i = 1; i < FUT_CHNG_MAX; i++) {
+  for (int i = 1; i < FUT_CHNG_MAX + 1; i++) {
     if (last_prices[i] == 0)
-      continue;
+      break; // last price is 0 means no data or liquid; cant track this
     double ch_pct =
         (last_prices[i] - last_prices[i - 1]) * 100.0 / (1.00 * last_prices[i]);
     result[result_index++] = ch_pct;
