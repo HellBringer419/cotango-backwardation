@@ -4,6 +4,7 @@
 #include <curl/easy.h>
 #include <curl/typecheck-gcc.h>
 #include <fyers_api.h>
+#include <fyers_model.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -77,12 +78,12 @@ int main(void) {
       read_instruments_master_file();
       break;
     case 4:
-      puts("Enter your symbol");
+      puts("Enter your symbol:");
       scanf("%s", input_symbol);
       show_next_3_futures(model, input_symbol, true, future_result);
       break;
     case 5:
-      puts("Enter your symbol");
+      puts("Enter your symbol:");
       scanf("%s", input_symbol);
       order_instr(model, input_symbol);
       break;
@@ -419,4 +420,31 @@ int find_cotango(fyers_model_t *model) {
   return 0;
 }
 
-int order_instr(fyers_model_t *model, const char *input_symbol) { return 0; }
+int order_instr(fyers_model_t *model, const char *input_symbol) {
+  cJSON* json = cJSON_CreateObject();
+
+  cJSON_AddStringToObject(json, "symbol", input_symbol);
+  cJSON_AddNumberToObject(json, "qty", 1);
+  cJSON_AddNumberToObject(json, "type", 2);
+  cJSON_AddNumberToObject(json, "side", 1);
+  cJSON_AddStringToObject(json, "productType", "CNC");
+  cJSON_AddNumberToObject(json, "limitPrice", 0);
+  cJSON_AddNumberToObject(json, "stopPrice", 0);
+  cJSON_AddStringToObject(json, "validity", "DAY");
+  cJSON_AddNumberToObject(json, "disclosedQty", 0);
+  cJSON_AddBoolToObject(json, "offlineOrder", false);
+  cJSON_AddNumberToObject(json, "stopLoss", 0);
+  cJSON_AddNumberToObject(json, "takeProfit", 0);
+  cJSON_AddStringToObject(json, "orderTag", "tag1");
+  cJSON_AddBoolToObject(json, "isSliceOrder", false);
+
+  const char *params = cJSON_Print(json);
+  printf("About to send %s\n", params);
+  fyers_response_t *order_response = fyers_model_place_order(model, params);
+  printf("Place Order: %s\n", order_response->data);
+
+  cJSON_Delete(json);
+  cJSON_free((void *)params);
+  fyers_response_destroy(order_response);
+  return 0;
+}
